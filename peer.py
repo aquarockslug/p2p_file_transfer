@@ -1,10 +1,9 @@
-import sys, threading, json
-from os import listdir, getcwd
+import sys, os, threading, json
+#from os import listdir, getcwd
 from socket import *
 
 # py peer.py A 127.0.0.1 1111 /files 
 # py peer.py B 127.0.0.2 2222 /filesB 127.0.0.1 1111
-# g test.txt 127.0.0.1 1112
 
 prompt = """Your options:\n1. [s]tatus\n2. [f]ind <filename>
 3. [g]et <filename> <peer IP> <peer port>\n4. [q]uit\nYour choice: """
@@ -15,7 +14,7 @@ if (len(args) != 4 and len(args) != 6):
     sys.exit(0)
 
 neighbors = []
-files = listdir(getcwd() + args[3])
+files = os.listdir(os.getcwd() + args[3])
 
 # 4 -> 2 sockets?
 lookupSocket = socket(AF_INET, SOCK_DGRAM)# UDP datagram
@@ -34,16 +33,16 @@ peer = {
 if (len(args) == 6): # join network
     firstNeighbor = {
         'ip': args[4],
-        'port': int(args[5])
+        'lookupPort': int(args[5])
     }
     # send join request to firstNeighbor
     joinRequest = {'type': 'join', 'peer': peer}
     clientSocket.sendto(str.encode(json.dumps(joinRequest)), 
-                        (firstNeighbor['ip'], firstNeighbor['port']))
+                        (firstNeighbor['ip'], firstNeighbor['lookupPort']))
     # wait for name as acknowledgment
     firstNeighbor['name'] = clientSocket.recvfrom(1024)[0].decode('UTF-8')
     print("%s: Connected to %s %s:%s" %  (peer['name'], firstNeighbor['name'], 
-                                   firstNeighbor['ip'], firstNeighbor['port']))
+                                   firstNeighbor['ip'], firstNeighbor['lookupPort']))
     neighbors.append(firstNeighbor)
 
 #def joinRequest()
@@ -83,8 +82,13 @@ def transfer():
         requestedFilename = message[0].decode('UTF-8')
         print("Received request for %s from %s" % 
                 (requestedFilename, connectionSocket.getpeername()))
-                
-        print(files[0])
+        for filename in files:
+            if filename == requestedFilename:
+                file = open(os.getcwd() + peer['path'] + "/" + filename)
+                connectionSocket.send(str(file.read()).encode())
+                print("file sent")
+                # connectionSocket.send(str("Error: no such file").encode())
+                # print("Error: no such file")
 
 ##########################################################################
 def ui():
@@ -102,8 +106,8 @@ def ui():
 def status(args):
     print("Peers:")
     for neighbor in neighbors:
-        print("\t%s %s:%s" % (neighbor['name'], neighbor['ip'], neighbor['port']))
-    files = listdir(getcwd() + peer['path'])# update files
+        print("\t%s %s:%s" % (neighbor['name'], neighbor['ip'], neighbor['lookupPort']))
+    files = os.listdir(os.getcwd() + peer['path'])# update files
     print("Files: %s" % peer['path'])
     for file in files:
         print("\t%s" % file)
@@ -122,7 +126,16 @@ def get(args):
         targetIp = args[1]
         targetPort = int(args[2])
         clientTransferSocket.connect((targetIp, targetPort))
+        print("Requesting %s from %s" % (filename, targetIp))
         clientTransferSocket.send(str.encode(filename))
+        file = clientTransferSocket.recv(2048).decode()
+        if file == "Error: no such file":
+            print(file)
+        else:
+            print("File received")
+            newFile = open(os.getcwd() + peer['path'] + "/" + filename, 'w')
+            newFile.write(file)
+            newFile.close()
     else: 
         print("incorrect number of arguments, must be 3")
 
@@ -131,7 +144,7 @@ def quit():
     for neighbor in neighbors:
         print("Notifying %s of departure" % neighbor['name'])
         clientSocket.sendto(str.encode(json.dumps(disconnectNotice)), 
-                            (firstNeighbor['ip'], firstNeighbor['port']))
+                            (firstNeighbor['ip'], firstNeighbor['lookupPort']))
     print("Quitting")
     sys.exit(0)
 
