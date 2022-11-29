@@ -19,7 +19,7 @@ files = os.listdir(os.getcwd() + args[3])
 # 4 -> 2 sockets?
 lookupSocket = socket(AF_INET, SOCK_DGRAM)# UDP datagram
 clientSocket = socket(AF_INET, SOCK_DGRAM)
-clientTransferSocket = socket(AF_INET, SOCK_STREAM)
+clientTransferSocket = socket(AF_INET, SOCK_STREAM)# TCP
 transferSocket = socket(AF_INET, SOCK_STREAM)
 
 peer = {
@@ -62,17 +62,35 @@ def lookup():
             lookupSocket.sendto(str.encode(peer['name']), returnAddress)
             print("%s: Accepting %s %s:%s" % (peer['name'], newNeighbor['name'], 
                                          newNeighbor['ip'], newNeighbor['lookupPort']))
-        #elif (message['type'] == 'lookup'):
+
+        elif (message['type'] == 'lookup'):
+            file = ""
+            file = getFile(message['filename'])
+            if file:
+                print("%s is found" % message['filename'])
+                # send ack to tell message['peer] the file is here
+                break
+            else:
+                print("file not found on this peer")
+
         #elif (message['type'] == 'response'):
+
         elif (message['type'] == 'disconnect'):
-            for neighbor in neighbors:
+            for neighbor in neighbors:# better way to check if object with specific value in list?
                 if (neighbor['name'] == message['name']):
                     neighbors.remove(neighbor)
                     print("%s is offline" % message['name'])
+                    break
+
+def getFile(filename):
+    for file in files:
+        if file == filename:
+            return file
+    else:
+        return ""
 
 ##########################################################################
 def transfer():
-    #transferSocket.bind((peer['ip'], peer['transferPort']))
     transferSocket.bind(('', peer['transferPort']))
     transferSocket.listen(10)
     while True:
@@ -115,10 +133,14 @@ def status(args):
 def find(args):
     if (len(args) == 1):
         filename = args[0]  
-        print("find %s", filename)
+        print("find %s" % filename)
     else: 
         print("incorrect number of arguments, must be 1")
-    # call get([filename, peerIp, peerPort])
+    # send lookup request to all neighbors
+    lookupRequest = {'type': 'lookup', 'peer': peer, 'filename': filename}
+    for neighbor in neighbors:
+        clientSocket.sendto(str.encode(json.dumps(lookupRequest)), (neighbor['ip'], neighbor['lookupPort']))
+    # call get([filename, peerIp, peerPort]) maybe in transfer instead
 
 def get(args):
     if (len(args) == 3):
