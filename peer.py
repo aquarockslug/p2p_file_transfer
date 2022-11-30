@@ -5,9 +5,6 @@ from socket import *
 # py peer.py B 127.0.0.2 2222 /filesB 127.0.0.1 1111
 # g test.txt 127.0.0.1 1112
 
-prompt = """Your options:\n1. [s]tatus\n2. [f]ind <filename>
-3. [g]et <filename> <peer IP> <peer port>\n4. [q]uit\nYour choice: """
-
 args = sys.argv[1:]
 if (len(args) != 4 and len(args) != 6):
     print("incorrect number of arguments, must be 4 or 6")
@@ -24,28 +21,28 @@ peer = {
     'path': args[3]
 }
 
-lookupSocket = socket(AF_INET, SOCK_DGRAM) # UDP 
+lookupSocket = socket(AF_INET, SOCK_DGRAM)  # UDP
 lookupSocket.bind((peer['ip'], peer['lookupPort']))
-transferSocket = socket(AF_INET, SOCK_STREAM) # TCP
+transferSocket = socket(AF_INET, SOCK_STREAM)  # TCP
 transferSocket.bind(('', peer['transferPort']))
 transferSocket.listen(10)
 
-if (len(args) == 6):  # join network
-    firstNeighbor = {
-        'ip': args[4],
-        'lookupPort': int(args[5])
-    }
-    # send join request to firstNeighbor
-    joinRequest = {'type': 'join', 'peer': peer}
-    lookupSocket.sendto(str.encode(json.dumps(joinRequest)),
-                        (firstNeighbor['ip'], firstNeighbor['lookupPort']))
-    # wait for name as acknowledgment
-    firstNeighbor['name'] = lookupSocket.recvfrom(1024)[0].decode('UTF-8')
-    print("%s: Connected to %s %s:%s" % (peer['name'], firstNeighbor['name'],
-                                          firstNeighbor['ip'], firstNeighbor['lookupPort']))
-    neighbors.append(firstNeighbor)
-
 def main():
+    if (len(args) == 6):  # join network
+        firstNeighbor = {
+            'ip': args[4],
+            'lookupPort': int(args[5])
+        }
+        # send join request to firstNeighbor
+        joinRequest = {'type': 'join', 'peer': peer}
+        lookupSocket.sendto(str.encode(json.dumps(joinRequest)),
+                        (firstNeighbor['ip'], firstNeighbor['lookupPort']))
+        # wait for name as acknowledgment
+        firstNeighbor['name'] = lookupSocket.recvfrom(1024)[0].decode('UTF-8')
+        print("%s: Connected to %s %s:%s" % (peer['name'], firstNeighbor['name'],
+                                          firstNeighbor['ip'], firstNeighbor['lookupPort']))
+        neighbors.append(firstNeighbor)
+
     uiThread = threading.Thread(target=ui, args=())
     lookupThread = threading.Thread(target=lookup, args=())
     transferThread = threading.Thread(target=transfer, args=())
@@ -58,56 +55,65 @@ def main():
 
 def lookup():
     print("running lookup on %s:%s" % (peer['ip'], peer['lookupPort']))
+    types = {'join': joinHandler, 'lookup': lookupHandler, 
+             'response': responseHandler, 'disconnect': disconnectHandler}
     while True:
         request = lookupSocket.recvfrom(1024)  # wait for request
-        message = json.loads(request[0])
-        returnAddress = request[1]
+        types[json.loads(request[0])['type']](request) # execute
 
-        if (message['type'] == 'join'):
-            newNeighbor = message['peer']
-            neighbors.append(newNeighbor)
-            lookupSocket.sendto(str.encode(peer['name']), returnAddress)
-            print("%s: Accepting %s %s:%s" % (peer['name'], newNeighbor['name'],
-                                              newNeighbor['ip'], newNeighbor['lookupPort']))
+def joinHandler(request):
+    message = json.loads(request[0])
+    returnAddress = request[1]
+    newNeighbor = message['peer']
+    neighbors.append(newNeighbor)
+    lookupSocket.sendto(str.encode(peer['name']), returnAddress)
+    print("%s: Accepting %s %s:%s" % (peer['name'], newNeighbor['name'],
+                                 newNeighbor['ip'], newNeighbor['lookupPort']))
 
-        elif (message['type'] == 'lookup'):
-            target = message['filename']
-            print("File request %s received from %s" % (target, message['names'][0]))
-            # discard request if I am already in names
-            for visitedPeer in message['names']:
-                if (visitedPeer == peer['name']):
-                    message = None
-                    print("Duplicate; discarding.")
-                    break
-            
-            if message: # new lookup request 
-                if haveFile(target):
-                    print("File %s available on %s" % (target, peer['path']))
-                    response = {'type': 'response', 
-                                'ip': peer['ip'], 
-                                'port': peer['transferPort'],
-                                'filename': target}
+def lookupHandler(request):
+    message = json.loads(request[0])
+    returnAddress = request[1]
+    target = message['filename']
+    print("File request %s received from %s" %
+            (target, message['names'][0]))
+    # discard if duplicate
+    for visitedPeer in message['names']:
+        if (visitedPeer == peer['name']):
+            message=None
+            print("Duplicate; discarding.")
+            break
+    # new lookup request
+    if message:
+        if haveFile(target):
+            print("File %s available on %s" % (target, peer['path']))
+            response={'type': 'response',
+                        'ip': peer['ip'],
+                        'port': peer['transferPort'],
+                        'filename': target}
 
-                    lookupSocket.sendto(str.encode(json.dumps(response)), 
-                        (message['source']['ip'], message['source']['lookupPort']))
-                else: # not found, forward request
-                    message['names'].append(peer['name'])   
-                    print("Flooding to neighbors:")
-                    for neighbor in neighbors:
-                        if neighbor['ip'] != returnAddress[0]:
-                            lookupSocket.sendto(str.encode(json.dumps(message)),
-                            (neighbor['ip'], neighbor['lookupPort']))
+            lookupSocket.sendto(str.encode(json.dumps(response)),
+                (message['source']['ip'], message['source']['lookupPort']))
+        # not found, forward request
+        else: 
+            message['names'].append(peer['name'])   
+            print("Flooding to neighbors:")
+            for neighbor in neighbors:
+                if neighbor['ip'] != returnAddress[0]: # todo: check if this works
+                    lookupSocket.sendto(str.encode(json.dumps(message)),
+                        (neighbor['ip'], neighbor['lookupPort']))
 
-        elif (message['type'] == 'response'):
-            print("Response received")
-            get([message['filename'], message['ip'], message['port']]) 
+def responseHandler(request):
+    message = json.loads(request[0])
+    print("Response received")
+    get([message['filename'], message['ip'], message['port']]) 
 
-        elif (message['type'] == 'disconnect'):
-            for neighbor in neighbors:  
-                if (neighbor['name'] == message['name']):
-                    neighbors.remove(neighbor)
-                    print("%s is offline" % message['name'])
-                    break
+def disconnectHandler(request):
+    message = json.loads(request[0])
+    for neighbor in neighbors:  
+        if (neighbor['name'] == message['name']):
+            neighbors.remove(neighbor)
+            print("%s is offline" % message['name'])
+            break
 
 def haveFile(target):
     files = os.listdir(os.getcwd() + peer['path'])
@@ -121,11 +127,10 @@ def haveFile(target):
 
 def transfer():
     while True:
-        connectionSocket, addr = transferSocket.accept()  # wait for incoming connection
-        print("Connection established")
+        connectionSocket, addr = transferSocket.accept()  # wait for connection
         message = connectionSocket.recvfrom(1024)  # wait for message
         requestedFilename = message[0].decode('UTF-8')
-        sendfile(connectionSocket, requestedFilename) # new thread?
+        sendfile(connectionSocket, requestedFilename)
         print("Received request for %s from %s" %
               (requestedFilename, connectionSocket.getpeername()))
         connectionSocket.close()
@@ -145,6 +150,8 @@ def sendfile(connectionSocket, filename):
 ##########################################################################
 
 def ui():
+    prompt = """Your options:\n1. [s]tatus\n2. [f]ind <filename>
+3. [g]et <filename> <peer IP> <peer port>\n4. [q]uit\nYour choice: """
     command = ''
     options = {'s': status, 'f': find, 'g': get}
     while (command != 'q'):
@@ -213,10 +220,8 @@ def quit():
     for neighbor in neighbors:
         print("Notifying %s of departure" % neighbor['name'])
         lookupSocket.sendto(str.encode(json.dumps(disconnectNotice)),
-                            (firstNeighbor['ip'], firstNeighbor['lookupPort']))
+                            (neighbor['ip'], neighbor['lookupPort']))
     print("Quitting")
     sys.exit(0)
-
-##########################################################################
 
 main()
